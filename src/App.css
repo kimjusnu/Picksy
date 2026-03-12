@@ -113,6 +113,15 @@ button {
   gap: 14px;
 }
 
+.brandButton {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
 .logoBadge {
   position: relative;
   display: grid;
@@ -607,6 +616,42 @@ button:disabled {
   gap: 12px;
 }
 
+.activityFeedList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.activityFeedCard {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding: 18px;
+  border: 1px solid rgba(30, 36, 48, 0.08);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.82);
+  text-align: left;
+  cursor: pointer;
+  animation: popIn 0.35s ease;
+}
+
+.activityFeedMeta,
+.activityFeedFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.activityFeedComment {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .boardPreviewRow,
 .boardRow {
   display: grid;
@@ -1026,6 +1071,10 @@ button:disabled {
   font-weight: 700;
 }
 
+.tinyButton.active {
+  color: var(--text);
+}
+
 .missionRow,
 .rewardItem,
 .leaderRow,
@@ -1205,6 +1254,51 @@ button:disabled {
 
 .boardCommentItem {
   background: rgba(255, 255, 255, 0.82);
+}
+
+.boardVoteCard {
+  margin: 6px 0 18px;
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid rgba(30, 36, 48, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.74));
+}
+
+.boardVoteActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.boardVoteButton {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid rgba(30, 36, 48, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.boardVoteButton.warm {
+  box-shadow: inset 0 0 0 1px rgba(255, 107, 61, 0.08);
+}
+
+.boardVoteButton.cool {
+  box-shadow: inset 0 0 0 1px rgba(23, 181, 174, 0.08);
+}
+
+.boardVoteButton:hover {
+  transform: translateY(-2px);
 }
 
 .resultWrap {
@@ -1406,7 +1500,9 @@ button:disabled {
   .arenaLayout,
   .insightGrid,
   .boardLayout,
-  .topicGrid {
+  .topicGrid,
+  .activityFeedList,
+  .boardVoteActions {
     grid-template-columns: 1fr;
   }
 

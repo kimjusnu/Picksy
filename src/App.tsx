@@ -50,8 +50,21 @@ type BoardMetric = {
   strength: number
 }
 
+type ActivityFeedItem = {
+  id: string
+  cardId: string
+  room: PlayableRoom
+  prompt: string
+  commentText: string
+  author: string
+  createdAt: number
+  likes: number
+}
+
 const SESSION_KEY = 'picksy-session-v5'
-const COMMENTS_KEY = 'picksy-discussion-comments-v1'
+const COMMENTS_KEY = 'picksy-discussion-comments-v2'
+const LEGACY_COMMENTS_KEY = 'picksy-discussion-comments-v1'
+const LIKED_COMMENTS_KEY = 'picksy-liked-comments-v1'
 const THEME_KEY = 'picksy-theme'
 const ROOM_ORDER: PlayableRoom[] = ['Weekend', 'Work', 'Food', 'Travel', 'Dating']
 
@@ -108,7 +121,7 @@ function readStoredDiscussionComments() {
   }
 
   try {
-    const raw = window.localStorage.getItem(COMMENTS_KEY)
+    const raw = window.localStorage.getItem(COMMENTS_KEY) ?? window.localStorage.getItem(LEGACY_COMMENTS_KEY)
     if (!raw) {
       return [] as DiscussionComment[]
     }
@@ -117,6 +130,24 @@ function readStoredDiscussionComments() {
     return Array.isArray(parsed) ? (parsed as DiscussionComment[]) : []
   } catch {
     return [] as DiscussionComment[]
+  }
+}
+
+function readLikedCommentIds() {
+  if (typeof window === 'undefined') {
+    return [] as string[]
+  }
+
+  try {
+    const raw = window.localStorage.getItem(LIKED_COMMENTS_KEY)
+    if (!raw) {
+      return [] as string[]
+    }
+
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : []
+  } catch {
+    return [] as string[]
   }
 }
 
@@ -157,11 +188,22 @@ function getTimestamp() {
   return Date.now()
 }
 
+function shuffleList<T>(items: T[]) {
+  const copy = [...items]
+
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    ;[copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]]
+  }
+
+  return copy
+}
+
 function buildSeedDiscussionComments(cards: BattleCard[], comments: CommentEntry[]) {
-  const cardsByRoom = ROOM_ORDER.reduce<Record<PlayableRoom, BattleCard[]>>(
+  const commentsByRoom = ROOM_ORDER.reduce<Record<PlayableRoom, CommentEntry[]>>(
     (accumulator, room) => ({
       ...accumulator,
-      [room]: cards.filter((card) => card.room === room),
+      [room]: comments.filter((comment) => comment.room === room),
     }),
     {
       Weekend: [],
@@ -180,24 +222,24 @@ function buildSeedDiscussionComments(cards: BattleCard[], comments: CommentEntry
     Dating: 0,
   }
 
-  return comments.flatMap((comment, index) => {
-    const candidates = cardsByRoom[comment.room]
-    const card = candidates[roomCounts[comment.room] % Math.max(1, candidates.length)]
+  return cards.flatMap((card, index) => {
+    const candidates = commentsByRoom[card.room]
+    const comment = candidates[roomCounts[card.room] % Math.max(1, candidates.length)]
 
-    roomCounts[comment.room] += 1
+    roomCounts[card.room] += 1
 
-    if (!card) {
+    if (!comment) {
       return []
     }
 
     return [
       {
-        id: `seed-${comment.id}`,
+        id: `seed-${card.id}-${comment.id}`,
         cardId: card.id,
         author: comment.name,
         text: comment.text,
-        likes: comment.likes,
-        createdAt: Date.now() - (index + 1) * 1000 * 60 * 47,
+        likes: Math.max(0, comment.likes - ((index * 7) % 23)),
+        createdAt: Date.now() - (index + 1) * 1000 * 60 * 17,
       },
     ]
   })
@@ -241,6 +283,8 @@ export default function App() {
   const [storedDiscussionComments, setStoredDiscussionComments] = useState<DiscussionComment[]>(() =>
     readStoredDiscussionComments(),
   )
+  const [likedCommentIds, setLikedCommentIds] = useState<string[]>(() => readLikedCommentIds())
+  const [activityFeedOffset, setActivityFeedOffset] = useState(0)
 
   const localCards = useMemo(() => t('cards', { returnObjects: true }) as unknown as BattleCard[], [t])
   const localComments = useMemo(
@@ -274,7 +318,19 @@ export default function App() {
     () => buildSeedDiscussionComments(cards, reactionComments),
     [cards, reactionComments],
   )
-  const discussionComments = storedDiscussionComments.length > 0 ? storedDiscussionComments : seedDiscussionComments
+  const discussionComments = useMemo(() => {
+    const merged = new Map<string, DiscussionComment>()
+
+    seedDiscussionComments.forEach((comment) => {
+      merged.set(comment.id, comment)
+    })
+
+    storedDiscussionComments.forEach((comment) => {
+      merged.set(comment.id, comment)
+    })
+
+    return [...merged.values()].sort((left, right) => right.createdAt - left.createdAt)
+  }, [seedDiscussionComments, storedDiscussionComments])
 
   const commentsByCard = useMemo(() => {
     const map = new Map<string, DiscussionComment[]>()
@@ -338,6 +394,40 @@ export default function App() {
     [activeRoom, boardPosts],
   )
 
+  const activityFeedPool = useMemo<ActivityFeedItem[]>(() => {
+    return boardPostsFiltered.flatMap((post) => {
+      const thread = commentsByCard.get(post.card.id) ?? []
+      const preview = thread[0]
+
+      if (!preview) {
+        return []
+      }
+
+      return [
+        {
+          id: `activity-${post.card.id}-${preview.id}`,
+          cardId: post.card.id,
+          room: post.card.room,
+          prompt: post.card.prompt,
+          commentText: preview.text,
+          author: preview.author,
+          createdAt: preview.createdAt,
+          likes: preview.likes,
+        },
+      ]
+    })
+  }, [boardPostsFiltered, commentsByCard])
+
+  const activityFeedOrder = useMemo(() => shuffleList(activityFeedPool), [activityFeedPool])
+  const activityFeedItems = useMemo(() => {
+    if (activityFeedOrder.length === 0) {
+      return [] as ActivityFeedItem[]
+    }
+
+    const visibleCount = Math.min(10, activityFeedOrder.length)
+    return Array.from({ length: visibleCount }, (_, index) => activityFeedOrder[(activityFeedOffset + index) % activityFeedOrder.length])
+  }, [activityFeedOffset, activityFeedOrder])
+
   const activeBoardCard = useMemo(() => {
     const directMatch = selectedBoardCardId ? cardsById.get(selectedBoardCardId) : null
     if (directMatch && (activeRoom === 'All' || directMatch.room === activeRoom)) {
@@ -355,12 +445,13 @@ export default function App() {
       ? {
           liveTopicsTitle: '지금 뜨는 토픽',
           liveTopicsSubtitle: '많이 눌리고, 오래 읽히고, 가장 크게 갈리는 글만 따로 모았어요.',
-          boardPreviewTitle: '토픽 보드',
-          boardPreviewSubtitle: 'Blind처럼 빠르게 훑고, 게시물 단위로 깊게 들어가는 흐름을 참고해 보드형으로 정리했어요.',
+          boardPreviewTitle: '지금 올라오는 한마디',
+          boardPreviewSubtitle: '글 하나와 댓글 하나를 묶어서 5초마다 새로 보여줘요.',
           boardCta: '전체 보드 보기',
           openBoard: '보드에서 보기',
           boardPageTitle: '전체 보드',
           boardPageSubtitle: '주제별 글과 댓글을 한 번에 읽는 공간이에요.',
+          boardListTitle: '토픽 보드',
           boardBack: '홈으로',
           boardEmpty: '아직 댓글이 없어요. 첫 반응을 남겨 보세요.',
           trendTitle: '실시간 흐름',
@@ -379,6 +470,7 @@ export default function App() {
           pollOpen: '토픽 둘러보기',
           boardNavLabel: '보드 선택',
           latestActivity: '최근 반응',
+          boardVoteTitle: '이 글에서도 바로 고르기',
           resultsAgree: '사람들이 많이 고른 쪽과 같았어요.',
           resultsMinority: '소수 의견을 골랐어요. 댓글이 더 재밌게 읽힐 수 있어요.',
           strongestBoard: '지금 가장 센 보드',
@@ -391,12 +483,13 @@ export default function App() {
       : {
           liveTopicsTitle: 'Live topics',
           liveTopicsSubtitle: 'We only surface the posts that are most clicked, most debated, and most split.',
-          boardPreviewTitle: 'Topic board',
-          boardPreviewSubtitle: 'Structured like a fast board feed first, then a deeper post-and-comment flow.',
+          boardPreviewTitle: 'Live reactions',
+          boardPreviewSubtitle: 'We rotate one post and one comment every 5 seconds.',
           boardCta: 'Open full board',
           openBoard: 'Open in board',
           boardPageTitle: 'Full board',
           boardPageSubtitle: 'Read topic posts and comments in one place.',
+          boardListTitle: 'Topic board',
           boardBack: 'Back home',
           boardEmpty: 'No comments yet. Be the first to react.',
           trendTitle: 'Live pulse',
@@ -415,6 +508,7 @@ export default function App() {
           pollOpen: 'Explore topics',
           boardNavLabel: 'Board selector',
           latestActivity: 'Latest activity',
+          boardVoteTitle: 'Pick inside this post',
           resultsAgree: 'You matched the side most people picked.',
           resultsMinority: 'You picked the minority side. The comments may get more interesting.',
           strongestBoard: 'Strongest board right now',
@@ -470,6 +564,10 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem(COMMENTS_KEY, JSON.stringify(storedDiscussionComments))
   }, [storedDiscussionComments])
+
+  useEffect(() => {
+    window.localStorage.setItem(LIKED_COMMENTS_KEY, JSON.stringify(likedCommentIds))
+  }, [likedCommentIds])
 
   useEffect(() => {
     if (!isDbConnected) {
@@ -556,6 +654,20 @@ export default function App() {
     }
   }, [copied])
 
+  useEffect(() => {
+    if (activityFeedOrder.length <= 1) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      setActivityFeedOffset((previous) => (previous + 1) % activityFeedOrder.length)
+    }, 5000)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [activityFeedOrder.length])
+
   function setAuthFeedback(status: AuthStatus, message: string) {
     setAuthStatus(status)
     setAuthMessage(message)
@@ -615,10 +727,12 @@ export default function App() {
   function handleBackHome() {
     setView('home')
     window.history.pushState({}, '', `${window.location.pathname}${window.location.search}`)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   function handleRoomChange(room: Room) {
     setActiveRoom(room)
+    setActivityFeedOffset(0)
     if (room !== 'All') {
       setVisitedRooms((previous) => (previous.includes(room) ? previous : [...previous, room]))
     }
@@ -641,8 +755,8 @@ export default function App() {
     setCurrentCardId(pool[nextIndex].id)
   }
 
-  function handleVote(side: Side) {
-    if (!currentCard) {
+  function handleVote(card: BattleCard | null, side: Side, options?: { advanceToNext?: boolean }) {
+    if (!card) {
       return
     }
 
@@ -652,18 +766,18 @@ export default function App() {
     }
 
     const winningSide =
-      currentCard.left.votes === currentCard.right.votes
+      card.left.votes === card.right.votes
         ? side
-        : currentCard.left.votes > currentCard.right.votes
+        : card.left.votes > card.right.votes
           ? 'left'
           : 'right'
 
     const result: RoundResult = {
-      cardId: currentCard.id,
-      room: currentCard.room,
+      cardId: card.id,
+      room: card.room,
       selectedSide: side,
-      leftVotes: currentCard.left.votes,
-      rightVotes: currentCard.right.votes,
+      leftVotes: card.left.votes,
+      rightVotes: card.right.votes,
       matched: side === winningSide,
       xpGain: side === winningSide ? 28 : 34,
       sparksGain: side === winningSide ? 18 : 22,
@@ -673,9 +787,13 @@ export default function App() {
     setLastResult(result)
     setHistory((previous) => [result, ...previous].slice(0, 8))
     setStreak((previous) => previous + 1)
-    setVisitedRooms((previous) => (previous.includes(currentCard.room) ? previous : [...previous, currentCard.room]))
-    setSelectedBoardCardId(currentCard.id)
-    advanceCard(currentCard.id)
+    setVisitedRooms((previous) => (previous.includes(card.room) ? previous : [...previous, card.room]))
+    setCurrentCardId(card.id)
+    setSelectedBoardCardId(card.id)
+
+    if (options?.advanceToNext) {
+      advanceCard(card.id)
+    }
   }
 
   async function handleCopy() {
@@ -908,11 +1026,25 @@ export default function App() {
   }
 
   function handleLikeComment(commentId: string) {
+    const alreadyLiked = likedCommentIds.includes(commentId)
+    const targetComment = discussionComments.find((comment) => comment.id === commentId)
+
+    if (!targetComment) {
+      return
+    }
+
+    setLikedCommentIds((previous) =>
+      alreadyLiked ? previous.filter((id) => id !== commentId) : [...previous, commentId],
+    )
     setStoredDiscussionComments((previous) => {
-      const base = previous.length > 0 ? previous : seedDiscussionComments
-      return base.map((comment) =>
-        comment.id === commentId ? { ...comment, likes: comment.likes + 1 } : comment,
-      )
+      const nextLikes = Math.max(0, targetComment.likes + (alreadyLiked ? -1 : 1))
+      const existing = previous.find((comment) => comment.id === commentId)
+
+      if (existing) {
+        return previous.map((comment) => (comment.id === commentId ? { ...comment, likes: nextLikes } : comment))
+      }
+
+      return [{ ...targetComment, likes: nextLikes }, ...previous]
     })
   }
 
@@ -950,7 +1082,12 @@ export default function App() {
   return (
     <div className="appShell">
       <header className="topBar">
-        <div className="brandBlock">
+        <button
+          type="button"
+          className="brandButton brandBlock"
+          onClick={handleBackHome}
+          aria-label={locale === 'ko' ? 'Picksy 홈으로 이동' : 'Go to Picksy home'}
+        >
           <div className="logoBadge" aria-hidden="true">
             <img className="logoImage" src={logoMark} alt="" />
           </div>
@@ -958,7 +1095,7 @@ export default function App() {
             <p className="brand">{t('brand.name')}</p>
             <span className="brandSub">{t('brand.tagline')}</span>
           </div>
-        </div>
+        </button>
 
         <div className="utilityGroup">
           {isDbConnected ? <span className="statusPill online">{t('system.dbReady')}</span> : null}
@@ -1166,7 +1303,7 @@ export default function App() {
                   <p className="supportText">{currentCard.context}</p>
 
                   <div className="choiceGrid">
-                    <button type="button" className="voteButton warm" onClick={() => handleVote('left')}>
+                    <button type="button" className="voteButton warm" onClick={() => handleVote(currentCard, 'left', { advanceToNext: true })}>
                       <span className="choiceLabel">{currentCard.left.label}</span>
                       <span className="choiceDetail">{currentCard.left.detail}</span>
                       <span className={`choiceVotes ${session ? '' : 'locked'}`}>
@@ -1174,7 +1311,7 @@ export default function App() {
                       </span>
                     </button>
 
-                    <button type="button" className="voteButton cool" onClick={() => handleVote('right')}>
+                    <button type="button" className="voteButton cool" onClick={() => handleVote(currentCard, 'right', { advanceToNext: true })}>
                       <span className="choiceLabel">{currentCard.right.label}</span>
                       <span className="choiceDetail">{currentCard.right.detail}</span>
                       <span className={`choiceVotes ${session ? '' : 'locked'}`}>
@@ -1250,7 +1387,11 @@ export default function App() {
                             </div>
                             <p>{comment.text}</p>
                             <div className="threadActions">
-                              <button type="button" className="tinyButton" onClick={() => handleLikeComment(comment.id)}>
+                              <button
+                                type="button"
+                                className={`tinyButton ${likedCommentIds.includes(comment.id) ? 'active' : ''}`}
+                                onClick={() => handleLikeComment(comment.id)}
+                              >
                                 ♥ {comment.likes}
                               </button>
                             </div>
@@ -1281,21 +1422,30 @@ export default function App() {
               </button>
             </div>
 
-            <div className="boardPreviewList">
-              {boardPostsFiltered.slice(0, 5).map((post) => (
-                <button key={post.card.id} type="button" className="boardPreviewRow" onClick={() => handleOpenBoard(post.card.id)}>
-                  <div className="boardPreviewInfo">
-                    <div className="boardPreviewMeta">
-                      <span className="metaChip">{t(`rooms.${post.card.room}`)}</span>
-                      <span>{boardCopy.commentCount(post.commentCount)}</span>
-                      <span>{boardCopy.thinkTime(post.thinkTime)}</span>
+            <div className="activityFeedList">
+              {activityFeedItems.length > 0 ? (
+                activityFeedItems.map((item, index) => (
+                  <button
+                    key={`${item.id}-${activityFeedOffset}-${index}`}
+                    type="button"
+                    className="activityFeedCard"
+                    onClick={() => handleOpenBoard(item.cardId)}
+                  >
+                    <div className="activityFeedMeta">
+                      <span className="metaChip">{t(`rooms.${item.room}`)}</span>
+                      <span>{formatRelativeTime(locale, item.createdAt)}</span>
                     </div>
-                    <strong>{post.card.prompt}</strong>
-                    <p className="boardPreviewSnippet">{post.latestComment?.text ?? post.card.context}</p>
-                  </div>
-                  <span className="boardPreviewArrow">›</span>
-                </button>
-              ))}
+                    <strong>{item.prompt}</strong>
+                    <p className="activityFeedComment">{item.commentText}</p>
+                    <div className="activityFeedFooter">
+                      <span>{item.author}</span>
+                      <span>♥ {item.likes}</span>
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <p className="emptyState">{boardCopy.boardEmpty}</p>
+              )}
             </div>
           </section>
         </>
@@ -1330,7 +1480,7 @@ export default function App() {
             <article className="surfaceCard boardListCard">
               <div className="miniTitleRow">
                 <div>
-                  <h3>{boardCopy.boardPreviewTitle}</h3>
+                  <h3>{boardCopy.boardListTitle}</h3>
                   <p className="supportText">{boardCopy.latestActivity}</p>
                 </div>
               </div>
@@ -1391,6 +1541,22 @@ export default function App() {
                     <span className="topicMetric">{boardCopy.spread(getVoteSpread(activeBoardCard))}</span>
                   </div>
 
+                  <div className="boardVoteCard">
+                    <div className="miniTitleRow">
+                      <strong>{boardCopy.boardVoteTitle}</strong>
+                    </div>
+                    <div className="boardVoteActions">
+                      <button type="button" className="boardVoteButton warm" onClick={() => handleVote(activeBoardCard, 'left')}>
+                        <span>{activeBoardCard.left.label}</span>
+                        <strong>{session ? `${activeBoardCard.left.votes}%` : '??'}</strong>
+                      </button>
+                      <button type="button" className="boardVoteButton cool" onClick={() => handleVote(activeBoardCard, 'right')}>
+                        <span>{activeBoardCard.right.label}</span>
+                        <strong>{session ? `${activeBoardCard.right.votes}%` : '??'}</strong>
+                      </button>
+                    </div>
+                  </div>
+
                   <form className="commentForm" onSubmit={(event) => handleCommentSubmit(event, activeBoardCard.id)}>
                     <textarea
                       className="commentTextarea"
@@ -1420,7 +1586,11 @@ export default function App() {
                           </div>
                           <p>{comment.text}</p>
                           <div className="threadActions">
-                            <button type="button" className="tinyButton" onClick={() => handleLikeComment(comment.id)}>
+                            <button
+                              type="button"
+                              className={`tinyButton ${likedCommentIds.includes(comment.id) ? 'active' : ''}`}
+                              onClick={() => handleLikeComment(comment.id)}
+                            >
                               ♥ {comment.likes}
                             </button>
                           </div>
