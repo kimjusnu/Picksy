@@ -1,5 +1,5 @@
 ﻿
-import { startTransition, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { useTranslation } from 'react-i18next'
 import './App.css'
@@ -188,15 +188,14 @@ function getTimestamp() {
   return Date.now()
 }
 
-function shuffleList<T>(items: T[]) {
-  const copy = [...items]
+function getStableOrderValue(value: string) {
+  let hash = 0
 
-  for (let index = copy.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1))
-    ;[copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]]
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0
   }
 
-  return copy
+  return hash
 }
 
 function buildSeedDiscussionComments(cards: BattleCard[], comments: CommentEntry[]) {
@@ -251,6 +250,8 @@ export default function App() {
   const battleRef = useRef<HTMLDivElement | null>(null)
   const nicknameTouchedRef = useRef(false)
   const copyTimerRef = useRef<number | null>(null)
+  const feedItemRefs = useRef(new Map<string, HTMLButtonElement>())
+  const previousFeedRectsRef = useRef(new Map<string, DOMRect>())
 
   const [theme, setTheme] = useState<ThemeName>(() => readTheme())
   const [view, setView] = useState<AppView>(() =>
@@ -418,7 +419,10 @@ export default function App() {
     })
   }, [boardPostsFiltered, commentsByCard])
 
-  const activityFeedOrder = useMemo(() => shuffleList(activityFeedPool), [activityFeedPool])
+  const activityFeedOrder = useMemo(
+    () => [...activityFeedPool].sort((left, right) => getStableOrderValue(left.id) - getStableOrderValue(right.id)),
+    [activityFeedPool],
+  )
   const activityFeedItems = useMemo(() => {
     if (activityFeedOrder.length === 0) {
       return [] as ActivityFeedItem[]
@@ -437,8 +441,17 @@ export default function App() {
     return boardPostsFiltered[0]?.card ?? currentCard ?? cards[0] ?? null
   }, [activeRoom, boardPostsFiltered, cards, cardsById, currentCard, selectedBoardCardId])
 
-  const currentCardComments = currentCard ? (commentsByCard.get(currentCard.id) ?? []).slice(0, 3) : []
+  const selectedCard = lastResult ? cardsById.get(lastResult.cardId) ?? null : null
+  const insightCard = selectedCard ?? currentCard
+  const insightCardAllComments = insightCard ? commentsByCard.get(insightCard.id) ?? [] : []
+  const insightCardComments = insightCardAllComments.slice(0, 3)
   const activeBoardComments = activeBoardCard ? commentsByCard.get(activeBoardCard.id) ?? [] : []
+  const selectedChoiceLabel =
+    selectedCard && lastResult
+      ? lastResult.selectedSide === 'left'
+        ? selectedCard.left.label
+        : selectedCard.right.label
+      : ''
 
   const boardCopy =
     locale === 'ko'
@@ -668,6 +681,52 @@ export default function App() {
     }
   }, [activityFeedOrder.length])
 
+  useLayoutEffect(() => {
+    const nextRects = new Map<string, DOMRect>()
+
+    activityFeedItems.forEach((item) => {
+      const node = feedItemRefs.current.get(item.id)
+      if (!node) {
+        return
+      }
+
+      const nextRect = node.getBoundingClientRect()
+      const previousRect = previousFeedRectsRef.current.get(item.id)
+      nextRects.set(item.id, nextRect)
+
+      if (previousRect) {
+        const deltaX = previousRect.left - nextRect.left
+        const deltaY = previousRect.top - nextRect.top
+
+        if (deltaX !== 0 || deltaY !== 0) {
+          node.animate(
+            [
+              { transform: `translate(${deltaX}px, ${deltaY}px)` },
+              { transform: 'translate(0, 0)' },
+            ],
+            {
+              duration: 420,
+              easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+            },
+          )
+        }
+      } else {
+        node.animate(
+          [
+            { opacity: 0, transform: 'translateY(18px) scale(0.98)' },
+            { opacity: 1, transform: 'translateY(0) scale(1)' },
+          ],
+          {
+            duration: 360,
+            easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          },
+        )
+      }
+    })
+
+    previousFeedRectsRef.current = nextRects
+  }, [activityFeedItems])
+
   function setAuthFeedback(status: AuthStatus, message: string) {
     setAuthStatus(status)
     setAuthMessage(message)
@@ -809,6 +868,8 @@ export default function App() {
     if (isAuthModalOpen && authMode === 'signUp' && !nicknameTouchedRef.current) {
       setAuthDisplayName(getRandomNickname(nextLanguage))
     }
+
+    setActivityFeedOffset(0)
 
     startTransition(() => {
       void i18n.changeLanguage(nextLanguage)
@@ -1076,7 +1137,6 @@ export default function App() {
     setCommentDraft('')
   }
 
-  const selectedCard = lastResult ? cardsById.get(lastResult.cardId) ?? null : null
   const signInLabel = session ? t('auth.currentUser', { name: getDisplayName(session, locale) }) : t('auth.loginButton')
 
   return (
@@ -1349,24 +1409,31 @@ export default function App() {
                     <h3>{boardCopy.discussionTitle}</h3>
                     <p className="supportText">{boardCopy.discussionSubtitle}</p>
                   </div>
-                  {currentCard ? <span className="metaChip">{boardCopy.commentCount(currentCardComments.length)}</span> : null}
+                  {insightCard ? <span className="metaChip">{boardCopy.commentCount(insightCardAllComments.length)}</span> : null}
                 </div>
 
-                {currentCard ? (
+                {insightCard ? (
                   <>
                     <div className="metricStrip">
                       <div className="metricCard">
                         <span>{boardCopy.voteMetric}</span>
-                        <strong>{formatNumber(locale, getEstimatedVotes(currentCard))}</strong>
+                        <strong>{formatNumber(locale, getEstimatedVotes(insightCard))}</strong>
                       </div>
                       <div className="metricCard">
                         <span>{boardCopy.thinkMetric}</span>
-                        <strong>{getEstimatedThinkTime(currentCard)}초</strong>
+                        <strong>{locale === 'ko' ? `${getEstimatedThinkTime(insightCard)}초` : `${getEstimatedThinkTime(insightCard)}s`}</strong>
                       </div>
                     </div>
 
                     {selectedCard ? (
                       <div className="resultInline">
+                        <div className="resultInlineMeta">
+                          <span className="metaChip">{t(`rooms.${selectedCard.room}`)}</span>
+                          <span>{selectedChoiceLabel}</span>
+                        </div>
+                        <strong>{selectedCard.prompt}</strong>
+                        <p className="supportText">{selectedCard.context}</p>
+                        <hr className="resultDivider" />
                         <strong>{boardCopy.latestChoice}</strong>
                         <p>{lastResult?.matched ? boardCopy.resultsAgree : boardCopy.resultsMinority}</p>
                       </div>
@@ -1378,8 +1445,8 @@ export default function App() {
                     )}
 
                     <div className="threadList">
-                      {currentCardComments.length > 0 ? (
-                        currentCardComments.map((comment) => (
+                      {insightCardComments.length > 0 ? (
+                        insightCardComments.map((comment) => (
                           <div key={comment.id} className="threadItem">
                             <div className="commentMeta">
                               <strong>{comment.author}</strong>
@@ -1402,7 +1469,7 @@ export default function App() {
                       )}
                     </div>
 
-                    <button type="button" className="secondaryButton fullWidth" onClick={() => handleOpenBoard(currentCard.id)}>
+                    <button type="button" className="secondaryButton fullWidth" onClick={() => handleOpenBoard(insightCard.id)}>
                       {boardCopy.openComments}
                     </button>
                   </>
@@ -1424,12 +1491,19 @@ export default function App() {
 
             <div className="activityFeedList">
               {activityFeedItems.length > 0 ? (
-                activityFeedItems.map((item, index) => (
+                activityFeedItems.map((item) => (
                   <button
-                    key={`${item.id}-${activityFeedOffset}-${index}`}
+                    key={item.id}
                     type="button"
                     className="activityFeedCard"
                     onClick={() => handleOpenBoard(item.cardId)}
+                    ref={(node) => {
+                      if (node) {
+                        feedItemRefs.current.set(item.id, node)
+                      } else {
+                        feedItemRefs.current.delete(item.id)
+                      }
+                    }}
                   >
                     <div className="activityFeedMeta">
                       <span className="metaChip">{t(`rooms.${item.room}`)}</span>
