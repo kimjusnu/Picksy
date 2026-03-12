@@ -1,0 +1,23 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="picksyGradient" x1="16" y1="14" x2="80" y2="82" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF7A45" />
+      <stop offset="1" stop-color="#18B7AE" />
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="72" height="72" rx="24" fill="url(#picksyGradient)" />
+  <path
+    d="M31 67V29H49.5C58.0604 29 63 33.7721 63 40.9C63 47.5129 58.0604 52.1 49.5 52.1H40.5V67"
+    stroke="white"
+    stroke-width="8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M51 57L66 67"
+    stroke="white"
+    stroke-width="8"
+    stroke-linecap="round"
+  />
+  <circle cx="67" cy="67" r="5.5" fill="white" fill-opacity="0.96" />
+</svg>
