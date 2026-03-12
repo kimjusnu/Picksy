@@ -805,7 +805,7 @@ const koComments: CommentEntry[] = [
 const koTranslation = {
   brand: {
     name: 'Picksy',
-    tagline: '지금 바로 고르는 취향 배틀',
+    tagline: '지금 바로 고르는 반응 보드',
   },
   system: {
     language: '언어',
@@ -815,15 +815,15 @@ const koTranslation = {
   },
   actions: {
     invite: '친구 초대',
-    start: '바로 시작',
+    start: '지금 둘러보기',
     copy: '공유 문구 복사',
     copied: '복사됨',
   },
   hero: {
-    badge: '길게 읽지 말고 바로 고르기',
-    title: '지금 사람들 뭐 고르는지 바로 보자',
+    badge: '짧게 고르고 바로 반응 읽기',
+    title: '지금 사람들은 어디에 더 끌릴까',
     description:
-      '길게 답하는 테스트 대신, 한 번 탭하고 바로 결과를 보는 방식이에요. 계속 넘기다 보면 기록도 쌓이고 친구랑 비교도 할 수 있어요.',
+      'Picksy는 한 번 고르고 끝나는 서비스가 아니라, 선택 뒤에 붙는 댓글과 흐름까지 같이 읽는 토픽 보드예요. 짧게 보고 바로 다음 글로 넘어가도 되고, 마음에 걸린 글은 댓글까지 깊게 들어갈 수 있어요.',
   },
   stats: {
     liveLabel: '지금 참여중',
@@ -831,20 +831,20 @@ const koTranslation = {
     sessionLabel: '평균 머무는 시간',
     sessionValue: '{{value}}분',
     sessionNote: '짧게 보고 계속 넘기게 돼요',
-    shareLabel: '공유율',
-    shareNote: '카드 몇 개 보면 더 올라가요',
+    shareLabel: '댓글 전환율',
+    shareNote: '고른 뒤에 토론으로 넘어가는 비율이에요',
   },
   today: {
-    title: '오늘 기록',
-    subtitle: '지금 가장 반응 센 주제',
+    title: '실시간 토픽',
+    subtitle: '지금 가장 많이 눌리고, 오래 읽히고, 크게 갈리는 글',
     voteLeader: '투표량 1위',
-    thinkLeader: '오래 고민한 주제',
+    thinkLeader: '가장 오래 읽힌 글',
     landslideLeader: '한쪽 몰림 1위',
     votes: '예상 투표 {{value}}',
     thinkTime: '평균 고민 {{value}}초',
     spread: '{{value}}%p 차이',
-    more: '더보기',
-    jump: '이 주제로 보기',
+    more: '전체 보드 보기',
+    jump: '보드에서 보기',
   },
   profile: {
     title: '포인트 랩',
@@ -868,8 +868,8 @@ const koTranslation = {
   battle: {
     votes: '{{value}}% 선택',
     hiddenVotes: '??',
-    next: '고르면 바로 다음 카드가 떠요.',
-    compare: '짧게 고르고 바로 비교해요.',
+    next: '고르면 바로 다음 토픽으로 넘어가요.',
+    compare: '선택 뒤에는 같은 글의 댓글 흐름이 이어져요.',
   },
   missions: {
     title: '오늘 미션',
@@ -908,19 +908,19 @@ const koTranslation = {
     minority: '소수 선택',
   },
   community: {
-    title: '지금 반응',
-    subtitle: '짧고 솔직한 한마디',
+    title: '지금 댓글',
+    subtitle: '짧고 솔직한 반응이 먼저 붙어요',
     likes: '좋아요 {{value}}',
     items: koComments,
   },
   auth: {
     loginButton: '로그인',
-    title: '로그인하고 계속 보기',
+    title: '로그인하면 결과와 댓글이 열려요',
     subtitle: '이메일과 비밀번호로 바로 들어오고, 필요하면 비밀번호도 다시 설정할 수 있어요.',
     modalTitle: 'Picksy 계정',
     modalSubtitle: '회원가입부터 비밀번호 찾기까지 한 번에 처리할 수 있어요.',
     checking: '처리 중...',
-    loginToVote: '선택하면 로그인 창이 열려요.',
+    loginToVote: '고르면 로그인 창을 바로 열어드릴게요.',
     signInTab: '로그인',
     signUpTab: '회원가입',
     forgotTab: '비밀번호 찾기',
@@ -961,9 +961,9 @@ const koTranslation = {
     close: '닫기',
   },
   shareCard: {
-    title: '공유 카드',
-    subtitle: '친구 데려오기',
-    defaultText: 'Picksy에서 지금 뭐가 더 많이 선택되는지 같이 보자.',
+    title: '공유 문구',
+    subtitle: '친구와 같이 보기',
+    defaultText: 'Picksy에서 지금 사람들이 어디에 더 끌리는지 같이 보자.',
     button: '문구 복사',
     done: '복사 완료',
     resultText:
@@ -1019,7 +1019,7 @@ const enComments: CommentEntry[] = [
 const enTranslation = {
   brand: {
     name: 'Picksy',
-    tagline: 'quick pick playground',
+    tagline: 'a live reaction board',
   },
   system: {
     language: 'language',
@@ -1029,15 +1029,15 @@ const enTranslation = {
   },
   actions: {
     invite: 'Invite friends',
-    start: 'Start now',
+    start: 'Explore now',
     copy: 'Copy share text',
     copied: 'Copied',
   },
   hero: {
-    badge: 'Skip the long read. Pick right away.',
-    title: 'See what people choose right now.',
+    badge: 'Pick fast, then read the reaction.',
+    title: 'Where are people leaning right now?',
     description:
-      'Instead of a long test, this is one quick tap and instant feedback. Keep flipping and your streak, rewards, and share moments start building.',
+      'Picksy is a topic board built around quick choices, visible reaction patterns, and comment threads that keep you reading after the tap.',
   },
   stats: {
     liveLabel: 'Live now',
@@ -1045,20 +1045,20 @@ const enTranslation = {
     sessionLabel: 'Avg. time',
     sessionValue: '{{value}} min',
     sessionNote: 'Short cards keep people moving',
-    shareLabel: 'Share rate',
-    shareNote: 'It rises after a few cards',
+    shareLabel: 'Comment conversion',
+    shareNote: 'How often a pick turns into a discussion',
   },
   today: {
-    title: 'Today',
-    subtitle: 'The hottest topics right now',
+    title: 'Live topics',
+    subtitle: 'The most clicked, most read, and most split posts right now',
     voteLeader: 'Most voted',
-    thinkLeader: 'Longest think time',
+    thinkLeader: 'Longest read',
     landslideLeader: 'Biggest landslide',
     votes: '{{value}} estimated votes',
     thinkTime: '{{value}} sec avg. think time',
     spread: '{{value}} pt spread',
-    more: 'See more',
-    jump: 'Open this topic',
+    more: 'Open full board',
+    jump: 'Open in board',
   },
   profile: {
     title: 'Point Lab',
@@ -1082,8 +1082,8 @@ const enTranslation = {
   battle: {
     votes: '{{value}}% picked this',
     hiddenVotes: '??',
-    next: 'Pick once and the next card appears.',
-    compare: 'Fast choice. Instant compare.',
+    next: 'Pick once and the next topic opens.',
+    compare: 'After the pick, the comment thread keeps the story going.',
   },
   missions: {
     title: 'Daily goals',
@@ -1122,19 +1122,19 @@ const enTranslation = {
     minority: 'minority pick',
   },
   community: {
-    title: 'Live reactions',
-    subtitle: 'Short comments people leave',
+    title: 'Live comments',
+    subtitle: 'Short and candid reactions land first',
     likes: '{{value}} likes',
     items: enComments,
   },
   auth: {
     loginButton: 'Sign in',
-    title: 'Sign in to keep going',
+    title: 'Sign in to unlock results and comments',
     subtitle: 'Use email and password, and recover your password when you need it.',
     modalTitle: 'Picksy account',
     modalSubtitle: 'Sign in, create an account, or recover your password in one place.',
     checking: 'Working...',
-    loginToVote: 'Pick a side and we will open sign-in.',
+    loginToVote: 'Pick a side and we will open sign-in right away.',
     signInTab: 'Sign in',
     signUpTab: 'Create account',
     forgotTab: 'Forgot password',
@@ -1175,9 +1175,9 @@ const enTranslation = {
     close: 'Close',
   },
   shareCard: {
-    title: 'Share card',
+    title: 'Share text',
     subtitle: 'Bring friends in',
-    defaultText: 'Check what people are picking on Picksy right now.',
+    defaultText: 'Check where people are leaning on Picksy right now.',
     button: 'Copy text',
     done: 'Copied',
     resultText:

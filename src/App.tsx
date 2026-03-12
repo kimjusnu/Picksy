@@ -8,21 +8,11 @@ import { fetchRemoteCatalog, type RemoteCatalog } from './lib/content'
 import { getEstimatedThinkTime, getEstimatedVotes, getHotTopics, getVoteSpread } from './lib/engagement'
 import { getRandomNickname } from './lib/nicknames'
 import { isDbConnected, supabase } from './lib/supabase'
-import type {
-  BadgeId,
-  BattleCard,
-  CommentEntry,
-  LeaderboardEntry,
-  MissionCopy,
-  MissionId,
-  PlayableRoom,
-  Room,
-  RoundResult,
-  Side,
-} from './types'
+import type { BattleCard, CommentEntry, PlayableRoom, Room, RoundResult, Side } from './types'
 
 type Locale = 'ko' | 'en'
 type ThemeName = 'citrus' | 'ocean' | 'berry'
+type AppView = 'home' | 'board'
 type AuthMode = 'signIn' | 'signUp' | 'forgotPassword' | 'resetPassword'
 type AuthBusy = AuthMode | 'sendVerification' | 'verifyEmail' | null
 type AuthStatus = 'idle' | 'success' | 'error'
@@ -30,58 +20,45 @@ type AuthStatus = 'idle' | 'success' | 'error'
 type SessionSnapshot = {
   activeRoom: Room
   streak: number
-  xp: number
-  sparks: number
   visitedRooms: PlayableRoom[]
 }
 
-type UserProgressSnapshot = {
-  points: number
-  claimedMissionIds: MissionId[]
-  claimedDate: string
+type DiscussionComment = {
+  id: string
+  cardId: string
+  author: string
+  text: string
+  likes: number
+  createdAt: number
 }
 
-type BadgeCopy = {
-  id: BadgeId
-  name: string
-  summary: string
-  threshold: number
+type BoardPost = {
+  card: BattleCard
+  commentCount: number
+  estimatedVotes: number
+  thinkTime: number
+  spread: number
+  latestComment: DiscussionComment | null
+  score: number
 }
 
-type MissionView = MissionCopy & {
-  current: number
-  goal: number
-  claimable: boolean
-  claimed: boolean
+type BoardMetric = {
+  room: PlayableRoom
+  votes: number
+  comments: number
+  thinkTime: number
+  strength: number
 }
 
-const SESSION_KEY = 'picksy-session-v4'
-const USER_PROGRESS_PREFIX = 'picksy-user-progress-v4:'
+const SESSION_KEY = 'picksy-session-v5'
+const COMMENTS_KEY = 'picksy-discussion-comments-v1'
 const THEME_KEY = 'picksy-theme'
 const ROOM_ORDER: PlayableRoom[] = ['Weekend', 'Work', 'Food', 'Travel', 'Dating']
-const MISSION_GOALS: Record<MissionId, number> = {
-  daily_flip: 3,
-  crowd_reader: 2,
-  room_hopper: 2,
-  streak_builder: 5,
-}
 
 const DEFAULT_SESSION: SessionSnapshot = {
   activeRoom: 'All',
   streak: 0,
-  xp: 0,
-  sparks: 0,
   visitedRooms: [],
-}
-
-const DEFAULT_PROGRESS: UserProgressSnapshot = {
-  points: 0,
-  claimedMissionIds: [],
-  claimedDate: '',
-}
-
-function getTodayKey() {
-  return new Date().toLocaleDateString('sv-SE')
 }
 
 function normalizeLocale(language: string | null | undefined): Locale {
@@ -116,50 +93,35 @@ function readSession(): SessionSnapshot {
     return {
       activeRoom: parsed.activeRoom ?? DEFAULT_SESSION.activeRoom,
       streak: parsed.streak ?? DEFAULT_SESSION.streak,
-      xp: parsed.xp ?? DEFAULT_SESSION.xp,
-      sparks: parsed.sparks ?? DEFAULT_SESSION.sparks,
       visitedRooms: Array.isArray(parsed.visitedRooms)
         ? parsed.visitedRooms.filter((room): room is PlayableRoom => ROOM_ORDER.includes(room as PlayableRoom))
-        : DEFAULT_SESSION.visitedRooms,
+        : [],
     }
   } catch {
     return DEFAULT_SESSION
   }
 }
 
-function readUserProgress(userId: string): UserProgressSnapshot {
+function readStoredDiscussionComments() {
   if (typeof window === 'undefined') {
-    return DEFAULT_PROGRESS
+    return [] as DiscussionComment[]
   }
 
   try {
-    const raw = window.localStorage.getItem(`${USER_PROGRESS_PREFIX}${userId}`)
+    const raw = window.localStorage.getItem(COMMENTS_KEY)
     if (!raw) {
-      return DEFAULT_PROGRESS
+      return [] as DiscussionComment[]
     }
 
-    const parsed = JSON.parse(raw) as Partial<UserProgressSnapshot>
-    const today = getTodayKey()
-
-    return {
-      points: parsed.points ?? 0,
-      claimedMissionIds:
-        parsed.claimedDate === today && Array.isArray(parsed.claimedMissionIds)
-          ? parsed.claimedMissionIds.filter((id): id is MissionId => id in MISSION_GOALS)
-          : [],
-      claimedDate: parsed.claimedDate === today ? today : today,
-    }
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as DiscussionComment[]) : []
   } catch {
-    return DEFAULT_PROGRESS
+    return [] as DiscussionComment[]
   }
 }
 
-function getUserStorageKey(session: Session | null) {
-  return session?.user?.id ?? 'guest'
-}
-
 function getDisplayName(session: Session | null, locale: Locale) {
-  const fallback = locale === 'ko' ? 'Picksy 게스트' : 'Picksy guest'
+  const fallback = locale === 'ko' ? '익명 Picksy' : 'Picksy member'
   return (
     session?.user?.user_metadata?.nickname ??
     session?.user?.user_metadata?.name ??
@@ -168,26 +130,19 @@ function getDisplayName(session: Session | null, locale: Locale) {
   )
 }
 
-function getBadgeCatalog(locale: Locale): BadgeCopy[] {
-  if (locale === 'ko') {
-    return [
-      { id: 'rookie', name: '첫 픽', summary: 'Picksy에 처음 발을 들였어요.', threshold: 0 },
-      { id: 'trend', name: '트렌드 스캐너', summary: '사람들이 많이 누르는 흐름을 읽기 시작했어요.', threshold: 300 },
-      { id: 'insider', name: '픽시 인사이더', summary: '오래 머무르며 방을 돌고 미션도 챙겨요.', threshold: 700 },
-      { id: 'legend', name: '핫픽 레전드', summary: '오늘 기록과 미션을 거의 다 가져가는 사람입니다.', threshold: 1300 },
-    ]
-  }
-
-  return [
-    { id: 'rookie', name: 'First Pick', summary: 'You just stepped into Picksy.', threshold: 0 },
-    { id: 'trend', name: 'Trend Scanner', summary: 'You are starting to read the crowd.', threshold: 300 },
-    { id: 'insider', name: 'Picksy Insider', summary: 'You move across rooms and keep coming back.', threshold: 700 },
-    { id: 'legend', name: 'Hot Pick Legend', summary: 'You dominate missions and hot topics.', threshold: 1300 },
-  ]
-}
-
 function formatNumber(locale: Locale, value: number) {
   return value.toLocaleString(locale === 'ko' ? 'ko-KR' : 'en-US')
+}
+
+function formatRelativeTime(locale: Locale, timestamp: number) {
+  const diffMinutes = Math.max(1, Math.round((Date.now() - timestamp) / 60000))
+
+  if (diffMinutes < 60) {
+    return locale === 'ko' ? `${diffMinutes}분 전` : `${diffMinutes}m ago`
+  }
+
+  const diffHours = Math.round(diffMinutes / 60)
+  return locale === 'ko' ? `${diffHours}시간 전` : `${diffHours}h ago`
 }
 
 function getSharePercent(result: RoundResult | null) {
@@ -198,6 +153,56 @@ function getSharePercent(result: RoundResult | null) {
   return result.selectedSide === 'left' ? result.leftVotes : result.rightVotes
 }
 
+function getTimestamp() {
+  return Date.now()
+}
+
+function buildSeedDiscussionComments(cards: BattleCard[], comments: CommentEntry[]) {
+  const cardsByRoom = ROOM_ORDER.reduce<Record<PlayableRoom, BattleCard[]>>(
+    (accumulator, room) => ({
+      ...accumulator,
+      [room]: cards.filter((card) => card.room === room),
+    }),
+    {
+      Weekend: [],
+      Work: [],
+      Food: [],
+      Travel: [],
+      Dating: [],
+    },
+  )
+
+  const roomCounts: Record<PlayableRoom, number> = {
+    Weekend: 0,
+    Work: 0,
+    Food: 0,
+    Travel: 0,
+    Dating: 0,
+  }
+
+  return comments.flatMap((comment, index) => {
+    const candidates = cardsByRoom[comment.room]
+    const card = candidates[roomCounts[comment.room] % Math.max(1, candidates.length)]
+
+    roomCounts[comment.room] += 1
+
+    if (!card) {
+      return []
+    }
+
+    return [
+      {
+        id: `seed-${comment.id}`,
+        cardId: card.id,
+        author: comment.name,
+        text: comment.text,
+        likes: comment.likes,
+        createdAt: Date.now() - (index + 1) * 1000 * 60 * 47,
+      },
+    ]
+  })
+}
+
 export default function App() {
   const { t, i18n } = useTranslation()
   const locale = normalizeLocale(i18n.resolvedLanguage)
@@ -206,6 +211,9 @@ export default function App() {
   const copyTimerRef = useRef<number | null>(null)
 
   const [theme, setTheme] = useState<ThemeName>(() => readTheme())
+  const [view, setView] = useState<AppView>(() =>
+    typeof window !== 'undefined' && window.location.hash === '#board' ? 'board' : 'home',
+  )
   const [remoteCatalog, setRemoteCatalog] = useState<RemoteCatalog | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [authReady, setAuthReady] = useState(() => !supabase)
@@ -219,51 +227,39 @@ export default function App() {
   const [authVerificationCode, setAuthVerificationCode] = useState('')
   const [authPassword, setAuthPassword] = useState('')
   const [authPasswordConfirm, setAuthPasswordConfirm] = useState('')
-  const [authDisplayName, setAuthDisplayName] = useState(() => getRandomNickname('ko'))
+  const [authDisplayName, setAuthDisplayName] = useState(() => getRandomNickname(locale))
   const [authEmailVerified, setAuthEmailVerified] = useState(false)
   const [activeRoom, setActiveRoom] = useState<Room>(() => readSession().activeRoom)
   const [streak, setStreak] = useState(() => readSession().streak)
-  const [xp, setXp] = useState(() => readSession().xp)
-  const [sparks, setSparks] = useState(() => readSession().sparks)
   const [visitedRooms, setVisitedRooms] = useState<PlayableRoom[]>(() => readSession().visitedRooms)
   const [currentCardId, setCurrentCardId] = useState('')
   const [lastResult, setLastResult] = useState<RoundResult | null>(null)
   const [history, setHistory] = useState<RoundResult[]>([])
   const [copied, setCopied] = useState(false)
-  const [points, setPoints] = useState(() => readUserProgress('guest').points)
-  const [claimedMissionIds, setClaimedMissionIds] = useState<MissionId[]>(() => readUserProgress('guest').claimedMissionIds)
+  const [selectedBoardCardId, setSelectedBoardCardId] = useState('')
+  const [commentDraft, setCommentDraft] = useState('')
+  const [storedDiscussionComments, setStoredDiscussionComments] = useState<DiscussionComment[]>(() =>
+    readStoredDiscussionComments(),
+  )
 
   const localCards = useMemo(() => t('cards', { returnObjects: true }) as unknown as BattleCard[], [t])
-  const localLeaderboard = useMemo(
-    () => t('leaderboard', { returnObjects: true }) as unknown as LeaderboardEntry[],
-    [t],
-  )
-  const localRewards = useMemo(() => t('rewards', { returnObjects: true }) as unknown as string[], [t])
   const localComments = useMemo(
     () => t('community.items', { returnObjects: true }) as unknown as CommentEntry[],
     [t],
   )
-  const missionCopy = useMemo(
-    () => t('missions.items', { returnObjects: true }) as unknown as MissionCopy[],
-    [t],
-  )
 
   const cards = remoteCatalog?.cards ?? localCards
-  const leaderboard = remoteCatalog?.leaderboard ?? localLeaderboard
-  const rewards = remoteCatalog?.rewards ?? localRewards
-  const comments = remoteCatalog?.comments ?? localComments
-
+  const reactionComments = remoteCatalog?.comments ?? localComments
   const cardsById = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards])
   const filteredCards = useMemo(
     () => (activeRoom === 'All' ? cards : cards.filter((card) => card.room === activeRoom)),
     [activeRoom, cards],
   )
   const currentCard = useMemo(() => {
-    if (currentCardId && cardsById.has(currentCardId)) {
-      const current = cardsById.get(currentCardId)
-      if (activeRoom === 'All' || current?.room === activeRoom) {
-        return current ?? filteredCards[0] ?? cards[0] ?? null
-      }
+    const directMatch = currentCardId ? cardsById.get(currentCardId) : null
+
+    if (directMatch && (activeRoom === 'All' || directMatch.room === activeRoom)) {
+      return directMatch
     }
 
     return filteredCards[0] ?? cards[0] ?? null
@@ -274,66 +270,160 @@ export default function App() {
     return getHotTopics(cards).sort((left, right) => topicOrder.indexOf(left.kind) - topicOrder.indexOf(right.kind))
   }, [cards])
 
-  const crowdMatches = history.filter((result) => result.matched).length
-  const avgSession = (3.4 + Math.min(2.1, history.length * 0.22)).toFixed(1)
-  const shareRate = `${Math.min(86, 41 + history.length * 6)}%`
-  const liveUsers = formatNumber(locale, 1280 + cards.length * 17 + history.length * 24 + (session ? 120 : 0))
-  const badgeCatalog = getBadgeCatalog(locale)
-  const currentBadge = badgeCatalog.filter((badge) => points >= badge.threshold).at(-1) ?? badgeCatalog[0]
-  const nextBadge = badgeCatalog.find((badge) => points < badge.threshold) ?? null
-  const unlockedBadges = badgeCatalog.filter((badge) => points >= badge.threshold)
-  const badgeProgressCurrent = nextBadge ? points - currentBadge.threshold : 1
-  const badgeProgressGoal = nextBadge ? nextBadge.threshold - currentBadge.threshold : 1
-  const badgeProgressPercent = nextBadge
-    ? Math.min(100, Math.round((badgeProgressCurrent / Math.max(1, badgeProgressGoal)) * 100))
-    : 100
-  const level = Math.max(1, Math.floor(xp / 120) + 1)
-
-  const themeOptions: Array<{ id: ThemeName; label: string; className: string }> =
-    locale === 'ko'
-      ? [
-          { id: 'citrus', label: '기본', className: 'citrus' },
-          { id: 'ocean', label: '오션', className: 'ocean' },
-          { id: 'berry', label: '베리', className: 'berry' },
-        ]
-      : [
-          { id: 'citrus', label: 'Citrus', className: 'citrus' },
-          { id: 'ocean', label: 'Ocean', className: 'ocean' },
-          { id: 'berry', label: 'Berry', className: 'berry' },
-        ]
-
-  const roomComments = useMemo(
-    () => (activeRoom === 'All' ? comments : comments.filter((item) => item.room === activeRoom)),
-    [activeRoom, comments],
+  const seedDiscussionComments = useMemo(
+    () => buildSeedDiscussionComments(cards, reactionComments),
+    [cards, reactionComments],
   )
+  const discussionComments = storedDiscussionComments.length > 0 ? storedDiscussionComments : seedDiscussionComments
 
-  const missionProgress = useMemo(
-    () => ({
-      daily_flip: history.length,
-      crowd_reader: crowdMatches,
-      room_hopper: visitedRooms.length,
-      streak_builder: streak,
-    }),
-    [crowdMatches, history.length, streak, visitedRooms.length],
-  )
+  const commentsByCard = useMemo(() => {
+    const map = new Map<string, DiscussionComment[]>()
 
-  const missions = useMemo<MissionView[]>(
-    () =>
-      missionCopy.map((mission) => {
-        const goal = MISSION_GOALS[mission.id]
-        const current = missionProgress[mission.id]
-        const claimed = claimedMissionIds.includes(mission.id)
+    discussionComments.forEach((comment) => {
+      const previous = map.get(comment.cardId) ?? []
+      map.set(comment.cardId, [...previous, comment].sort((left, right) => right.createdAt - left.createdAt))
+    })
+
+    return map
+  }, [discussionComments])
+
+  const boardPosts = useMemo<BoardPost[]>(() => {
+    return cards
+      .map((card) => {
+        const thread = commentsByCard.get(card.id) ?? []
+        const estimatedVotes = getEstimatedVotes(card)
+        const thinkTime = getEstimatedThinkTime(card)
+        const spread = getVoteSpread(card)
 
         return {
-          ...mission,
-          goal,
-          current,
-          claimed,
-          claimable: current >= goal && !claimed,
+          card,
+          commentCount: thread.length,
+          estimatedVotes,
+          thinkTime,
+          spread,
+          latestComment: thread[0] ?? null,
+          score: estimatedVotes + thread.length * 820 + thinkTime * 180 + spread * 130,
         }
-      }),
-    [claimedMissionIds, missionCopy, missionProgress],
+      })
+      .sort((left, right) => right.score - left.score)
+  }, [cards, commentsByCard])
+
+  const boardMetrics = useMemo<BoardMetric[]>(() => {
+    return ROOM_ORDER.map((room) => {
+      const roomCards = cards.filter((card) => card.room === room)
+      const votes = roomCards.reduce((total, card) => total + getEstimatedVotes(card), 0)
+      const comments = discussionComments.filter((comment) => cardsById.get(comment.cardId)?.room === room).length
+      const thinkTime =
+        roomCards.length > 0
+          ? Number((roomCards.reduce((total, card) => total + getEstimatedThinkTime(card), 0) / roomCards.length).toFixed(1))
+          : 0
+
+      return {
+        room,
+        votes,
+        comments,
+        thinkTime,
+        strength: votes / 1000 + comments * 26 + thinkTime * 18,
+      }
+    })
+  }, [cards, cardsById, discussionComments])
+
+  const maxBoardStrength = Math.max(...boardMetrics.map((metric) => metric.strength), 1)
+  const liveUsers = formatNumber(locale, 1200 + cards.length * 19 + discussionComments.length * 13 + history.length * 21)
+  const avgSession = (2.8 + Math.min(2.9, boardMetrics.reduce((total, metric) => total + metric.thinkTime, 0) / 18)).toFixed(1)
+  const commentRate = `${Math.min(94, 34 + Math.round(discussionComments.length / Math.max(1, cards.length) * 18))}%`
+
+  const boardPostsFiltered = useMemo(
+    () => (activeRoom === 'All' ? boardPosts : boardPosts.filter((post) => post.card.room === activeRoom)),
+    [activeRoom, boardPosts],
   )
+
+  const activeBoardCard = useMemo(() => {
+    const directMatch = selectedBoardCardId ? cardsById.get(selectedBoardCardId) : null
+    if (directMatch && (activeRoom === 'All' || directMatch.room === activeRoom)) {
+      return directMatch
+    }
+
+    return boardPostsFiltered[0]?.card ?? currentCard ?? cards[0] ?? null
+  }, [activeRoom, boardPostsFiltered, cards, cardsById, currentCard, selectedBoardCardId])
+
+  const currentCardComments = currentCard ? (commentsByCard.get(currentCard.id) ?? []).slice(0, 3) : []
+  const activeBoardComments = activeBoardCard ? commentsByCard.get(activeBoardCard.id) ?? [] : []
+
+  const boardCopy =
+    locale === 'ko'
+      ? {
+          liveTopicsTitle: '지금 뜨는 토픽',
+          liveTopicsSubtitle: '많이 눌리고, 오래 읽히고, 가장 크게 갈리는 글만 따로 모았어요.',
+          boardPreviewTitle: '토픽 보드',
+          boardPreviewSubtitle: 'Blind처럼 빠르게 훑고, 게시물 단위로 깊게 들어가는 흐름을 참고해 보드형으로 정리했어요.',
+          boardCta: '전체 보드 보기',
+          openBoard: '보드에서 보기',
+          boardPageTitle: '전체 보드',
+          boardPageSubtitle: '주제별 글과 댓글을 한 번에 읽는 공간이에요.',
+          boardBack: '홈으로',
+          boardEmpty: '아직 댓글이 없어요. 첫 반응을 남겨 보세요.',
+          trendTitle: '실시간 흐름',
+          trendSubtitle: '보드별 반응 강도를 한눈에 봐요.',
+          voteMetric: '예상 투표',
+          commentMetric: '댓글',
+          thinkMetric: '평균 고민',
+          discussionTitle: '이 글에서 붙는 반응',
+          discussionSubtitle: '지금 이 토픽 아래에서 이어지는 댓글입니다.',
+          commentPlaceholder: '이 글에 한마디를 남겨 주세요',
+          commentSubmit: '댓글 달기',
+          loginToComment: '댓글을 달려면 로그인해 주세요.',
+          openComments: '댓글 이어보기',
+          latestChoice: '방금 선택한 결과',
+          latestChoiceEmpty: '먼저 하나 골라 보면 여기서 바로 흐름을 보여줘요.',
+          pollOpen: '토픽 둘러보기',
+          boardNavLabel: '보드 선택',
+          latestActivity: '최근 반응',
+          resultsAgree: '사람들이 많이 고른 쪽과 같았어요.',
+          resultsMinority: '소수 의견을 골랐어요. 댓글이 더 재밌게 읽힐 수 있어요.',
+          strongestBoard: '지금 가장 센 보드',
+          boardSummaryLabel: '토픽 요약',
+          commentCount: (value: number) => `댓글 ${value}개`,
+          estimatedVotes: (value: number) => `예상 투표 ${formatNumber(locale, value)}`,
+          thinkTime: (value: number) => `평균 고민 ${value}초`,
+          spread: (value: number) => `격차 ${value}%p`,
+        }
+      : {
+          liveTopicsTitle: 'Live topics',
+          liveTopicsSubtitle: 'We only surface the posts that are most clicked, most debated, and most split.',
+          boardPreviewTitle: 'Topic board',
+          boardPreviewSubtitle: 'Structured like a fast board feed first, then a deeper post-and-comment flow.',
+          boardCta: 'Open full board',
+          openBoard: 'Open in board',
+          boardPageTitle: 'Full board',
+          boardPageSubtitle: 'Read topic posts and comments in one place.',
+          boardBack: 'Back home',
+          boardEmpty: 'No comments yet. Be the first to react.',
+          trendTitle: 'Live pulse',
+          trendSubtitle: 'See which boards are moving right now.',
+          voteMetric: 'Est. votes',
+          commentMetric: 'Comments',
+          thinkMetric: 'Avg. think',
+          discussionTitle: 'What people are saying here',
+          discussionSubtitle: 'These are the latest comments under this topic.',
+          commentPlaceholder: 'Leave a short take on this topic',
+          commentSubmit: 'Post comment',
+          loginToComment: 'Sign in to comment.',
+          openComments: 'Open comments',
+          latestChoice: 'Your latest pick',
+          latestChoiceEmpty: 'Pick one topic and we will show the current reaction here.',
+          pollOpen: 'Explore topics',
+          boardNavLabel: 'Board selector',
+          latestActivity: 'Latest activity',
+          resultsAgree: 'You matched the side most people picked.',
+          resultsMinority: 'You picked the minority side. The comments may get more interesting.',
+          strongestBoard: 'Strongest board right now',
+          boardSummaryLabel: 'Topic snapshot',
+          commentCount: (value: number) => `${value} comments`,
+          estimatedVotes: (value: number) => `${formatNumber(locale, value)} est. votes`,
+          thinkTime: (value: number) => `${value}s avg. think time`,
+          spread: (value: number) => `${value} pt spread`,
+        }
 
   const shareText = useMemo(() => {
     if (!lastResult) {
@@ -371,23 +461,15 @@ export default function App() {
     const snapshot: SessionSnapshot = {
       activeRoom,
       streak,
-      xp,
-      sparks,
       visitedRooms,
     }
 
     window.localStorage.setItem(SESSION_KEY, JSON.stringify(snapshot))
-  }, [activeRoom, sparks, streak, visitedRooms, xp])
+  }, [activeRoom, streak, visitedRooms])
 
   useEffect(() => {
-    const progress: UserProgressSnapshot = {
-      points,
-      claimedMissionIds,
-      claimedDate: getTodayKey(),
-    }
-
-    window.localStorage.setItem(`${USER_PROGRESS_PREFIX}${getUserStorageKey(session)}`, JSON.stringify(progress))
-  }, [claimedMissionIds, points, session])
+    window.localStorage.setItem(COMMENTS_KEY, JSON.stringify(storedDiscussionComments))
+  }, [storedDiscussionComments])
 
   useEffect(() => {
     if (!isDbConnected) {
@@ -420,9 +502,6 @@ export default function App() {
 
     void supabase.auth.getSession().then(({ data }) => {
       setSession(data.session ?? null)
-      const progress = readUserProgress(getUserStorageKey(data.session ?? null))
-      setPoints(progress.points)
-      setClaimedMissionIds(progress.claimedMissionIds)
       setAuthReady(true)
     })
 
@@ -430,9 +509,6 @@ export default function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession)
-      const progress = readUserProgress(getUserStorageKey(nextSession))
-      setPoints(progress.points)
-      setClaimedMissionIds(progress.claimedMissionIds)
 
       if (event === 'PASSWORD_RECOVERY') {
         setPasswordRecoveryReady(true)
@@ -452,6 +528,17 @@ export default function App() {
       subscription.unsubscribe()
     }
   }, [i18n])
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setView(window.location.hash === '#board' ? 'board' : 'home')
+    }
+
+    window.addEventListener('hashchange', handleHashChange)
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange)
+    }
+  }, [])
 
   useEffect(() => {
     if (!copied) {
@@ -516,11 +603,18 @@ export default function App() {
     resetAuthFields(nextMode)
   }
 
-  function jumpToCard(card: BattleCard) {
-    setActiveRoom(card.room)
-    setCurrentCardId(card.id)
-    setVisitedRooms((previous) => (previous.includes(card.room) ? previous : [...previous, card.room]))
-    battleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  function handleOpenBoard(cardId?: string) {
+    if (cardId) {
+      setSelectedBoardCardId(cardId)
+    }
+
+    setView('board')
+    window.location.hash = 'board'
+  }
+
+  function handleBackHome() {
+    setView('home')
+    window.history.pushState({}, '', `${window.location.pathname}${window.location.search}`)
   }
 
   function handleRoomChange(room: Room) {
@@ -532,6 +626,7 @@ export default function App() {
     const nextCards = room === 'All' ? cards : cards.filter((card) => card.room === room)
     if (nextCards[0]) {
       setCurrentCardId(nextCards[0].id)
+      setSelectedBoardCardId(nextCards[0].id)
     }
   }
 
@@ -572,25 +667,15 @@ export default function App() {
       matched: side === winningSide,
       xpGain: side === winningSide ? 28 : 34,
       sparksGain: side === winningSide ? 18 : 22,
-      playedAt: Date.now(),
+      playedAt: getTimestamp(),
     }
 
     setLastResult(result)
     setHistory((previous) => [result, ...previous].slice(0, 8))
     setStreak((previous) => previous + 1)
-    setXp((previous) => previous + result.xpGain)
-    setSparks((previous) => previous + result.sparksGain)
     setVisitedRooms((previous) => (previous.includes(currentCard.room) ? previous : [...previous, currentCard.room]))
+    setSelectedBoardCardId(currentCard.id)
     advanceCard(currentCard.id)
-  }
-
-  function handleClaimMission(mission: MissionView) {
-    if (!mission.claimable) {
-      return
-    }
-
-    setClaimedMissionIds((previous) => [...previous, mission.id])
-    setPoints((previous) => previous + mission.points)
   }
 
   async function handleCopy() {
@@ -798,9 +883,7 @@ export default function App() {
       return
     }
 
-    const { error } = await supabase.auth.updateUser({
-      password: authPassword,
-    })
+    const { error } = await supabase.auth.updateUser({ password: authPassword })
 
     setAuthBusy(null)
 
@@ -824,9 +907,45 @@ export default function App() {
     await supabase.auth.signOut()
   }
 
+  function handleLikeComment(commentId: string) {
+    setStoredDiscussionComments((previous) => {
+      const base = previous.length > 0 ? previous : seedDiscussionComments
+      return base.map((comment) =>
+        comment.id === commentId ? { ...comment, likes: comment.likes + 1 } : comment,
+      )
+    })
+  }
+
+  function handleCommentSubmit(event: FormEvent<HTMLFormElement>, cardId: string) {
+    event.preventDefault()
+
+    if (!session) {
+      openAuthModal(boardCopy.loginToComment, 'signIn')
+      return
+    }
+
+    if (!commentDraft.trim()) {
+      return
+    }
+
+    const nextComment: DiscussionComment = {
+      id: `local-${getTimestamp()}`,
+      cardId,
+      author: getDisplayName(session, locale),
+      text: commentDraft.trim(),
+      likes: 0,
+      createdAt: getTimestamp(),
+    }
+
+    setStoredDiscussionComments((previous) => {
+      const base = previous.length > 0 ? previous : seedDiscussionComments
+      return [nextComment, ...base]
+    })
+    setCommentDraft('')
+  }
+
   const selectedCard = lastResult ? cardsById.get(lastResult.cardId) ?? null : null
   const signInLabel = session ? t('auth.currentUser', { name: getDisplayName(session, locale) }) : t('auth.loginButton')
-  const shareButtonLabel = copied ? t('shareCard.done') : t('shareCard.button')
 
   return (
     <div className="appShell">
@@ -845,7 +964,11 @@ export default function App() {
           {isDbConnected ? <span className="statusPill online">{t('system.dbReady')}</span> : null}
 
           <div className="themeSwitch" aria-label={locale === 'ko' ? '테마 선택' : 'Choose theme'}>
-            {themeOptions.map((option) => (
+            {([
+              { id: 'citrus', label: locale === 'ko' ? '기본' : 'Citrus', className: 'citrus' },
+              { id: 'ocean', label: locale === 'ko' ? '오션' : 'Ocean', className: 'ocean' },
+              { id: 'berry', label: locale === 'ko' ? '베리' : 'Berry', className: 'berry' },
+            ] as Array<{ id: ThemeName; label: string; className: string }>).map((option) => (
               <button
                 key={option.id}
                 type="button"
@@ -872,6 +995,12 @@ export default function App() {
             ))}
           </div>
 
+          {view === 'board' ? (
+            <button type="button" className="secondaryButton" onClick={handleBackHome}>
+              {boardCopy.boardBack}
+            </button>
+          ) : null}
+
           {session ? (
             <>
               <span className="userBadge">{signInLabel}</span>
@@ -891,422 +1020,424 @@ export default function App() {
         </div>
       </header>
 
-      <section className="heroSection">
-        <article className="heroCard">
-          <span className="eyebrow">{t('hero.badge')}</span>
-          <h1>{t('hero.title')}</h1>
-          <p className="heroText">{t('hero.description')}</p>
+      {view === 'home' ? (
+        <>
+          <section className="heroSection">
+            <article className="heroCard">
+              <span className="eyebrow">{t('hero.badge')}</span>
+              <h1>{t('hero.title')}</h1>
+              <p className="heroText">{t('hero.description')}</p>
 
-          <div className="heroActions">
-            <button
-              type="button"
-              className="primaryButton"
-              onClick={() => battleRef.current?.scrollIntoView({ behavior: 'smooth' })}
-            >
-              {t('actions.start')}
-            </button>
-            <button type="button" className="secondaryButton" onClick={handleCopy}>
-              {copied ? t('actions.copied') : t('actions.copy')}
-            </button>
-          </div>
-
-          <div className="heroStats">
-            <div className="statCard">
-              <span>{t('stats.liveLabel')}</span>
-              <strong>{liveUsers}</strong>
-              <small>{t('stats.liveNote')}</small>
-            </div>
-            <div className="statCard">
-              <span>{t('stats.sessionLabel')}</span>
-              <strong>{t('stats.sessionValue', { value: avgSession })}</strong>
-              <small>{t('stats.sessionNote')}</small>
-            </div>
-            <div className="statCard">
-              <span>{t('stats.shareLabel')}</span>
-              <strong>{shareRate}</strong>
-              <small>{t('stats.shareNote')}</small>
-            </div>
-          </div>
-        </article>
-
-        <aside className="heroSideCard">
-          <div className="miniTitleRow">
-            <div>
-              <h2>{t('today.title')}</h2>
-              <p className="supportText">{t('today.subtitle')}</p>
-            </div>
-          </div>
-
-          <div className="topicList">
-            {hotTopics.map((topic) => {
-              const leadingSide = topic.card.left.votes >= topic.card.right.votes ? topic.card.left : topic.card.right
-              const metricLabel =
-                topic.kind === 'votes'
-                  ? t('today.votes', { value: formatNumber(locale, getEstimatedVotes(topic.card)) })
-                  : topic.kind === 'thinking'
-                    ? t('today.thinkTime', { value: getEstimatedThinkTime(topic.card) })
-                    : t('today.spread', { value: getVoteSpread(topic.card) })
-              const topicLabel =
-                topic.kind === 'votes'
-                  ? t('today.voteLeader')
-                  : topic.kind === 'thinking'
-                    ? t('today.thinkLeader')
-                    : t('today.landslideLeader')
-
-              return (
-                <button key={topic.kind} type="button" className="topicCard" onClick={() => jumpToCard(topic.card)}>
-                  <span className="metaChip">{topicLabel}</span>
-                  <strong>{topic.card.prompt}</strong>
-                  <span className="topicMeta">
-                    {t(`rooms.${topic.card.room}`)} · {metricLabel}
-                  </span>
-                  <span className="topicResult">
-                    {leadingSide.label} · {leadingSide.votes}%
-                  </span>
-                  <span className="topicLink">{t('today.jump')}</span>
+              <div className="heroActions">
+                <button
+                  type="button"
+                  className="primaryButton"
+                  onClick={() => battleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                >
+                  {boardCopy.pollOpen}
                 </button>
-              )
-            })}
-          </div>
-
-          <button
-            type="button"
-            className="secondaryButton fullWidth"
-            onClick={() => {
-              if (hotTopics[0]) {
-                jumpToCard(hotTopics[0].card)
-              }
-            }}
-          >
-            {t('today.more')}
-          </button>
-        </aside>
-      </section>
-
-      <nav className="roomRail" aria-label={locale === 'ko' ? '방 선택' : 'Room selector'}>
-        {(['All', ...ROOM_ORDER] as Room[]).map((room) => (
-          <button
-            key={room}
-            type="button"
-            className={`roomPill ${activeRoom === room ? 'active' : ''}`}
-            onClick={() => handleRoomChange(room)}
-          >
-            {t(`rooms.${room}`)}
-          </button>
-        ))}
-      </nav>
-
-      <section className="arenaLayout">
-        <article className="battlePanel" ref={battleRef}>
-          {currentCard ? (
-            <>
-              <div className="battleMeta">
-                <span className="metaChip">{currentCard.heat}</span>
-                <span>{t(`rooms.${currentCard.room}`)}</span>
-              </div>
-              <h2>{currentCard.prompt}</h2>
-              <p className="supportText">{currentCard.context}</p>
-
-              <div className="choiceGrid">
-                <button type="button" className="voteButton warm" onClick={() => handleVote('left')}>
-                  <span className="choiceLabel">{currentCard.left.label}</span>
-                  <span className="choiceDetail">{currentCard.left.detail}</span>
-                  <span className={`choiceVotes ${session ? '' : 'locked'}`}>
-                    {session ? `${currentCard.left.votes}%` : t('battle.hiddenVotes')}
-                  </span>
-                </button>
-
-                <button type="button" className="voteButton cool" onClick={() => handleVote('right')}>
-                  <span className="choiceLabel">{currentCard.right.label}</span>
-                  <span className="choiceDetail">{currentCard.right.detail}</span>
-                  <span className={`choiceVotes ${session ? '' : 'locked'}`}>
-                    {session ? `${currentCard.right.votes}%` : t('battle.hiddenVotes')}
-                  </span>
+                <button type="button" className="secondaryButton" onClick={() => handleOpenBoard(currentCard?.id)}>
+                  {boardCopy.boardCta}
                 </button>
               </div>
 
-              {!session ? (
-                <div className="authGate">
-                  <strong>{t('auth.title')}</strong>
-                  <p className="supportText">{t('auth.loginToVote')}</p>
-                  <button type="button" className="primaryButton" onClick={() => openAuthModal(undefined, 'signIn')}>
-                    {t('auth.loginButton')}
-                  </button>
+              <div className="heroStats">
+                <div className="statCard">
+                  <span>{t('stats.liveLabel')}</span>
+                  <strong>{liveUsers}</strong>
+                  <small>{t('stats.liveNote')}</small>
                 </div>
-              ) : null}
-
-              <div className="battleFooter">
-                <span>{t('battle.compare')}</span>
-                <span>{t('battle.next')}</span>
+                <div className="statCard">
+                  <span>{t('stats.sessionLabel')}</span>
+                  <strong>{t('stats.sessionValue', { value: avgSession })}</strong>
+                  <small>{t('stats.sessionNote')}</small>
+                </div>
+                <div className="statCard">
+                  <span>{t('stats.shareLabel')}</span>
+                  <strong>{commentRate}</strong>
+                  <small>{t('stats.shareNote')}</small>
+                </div>
               </div>
-            </>
-          ) : (
-            <p className="emptyState">{t('latest.empty')}</p>
-          )}
-        </article>
+            </article>
 
-        <aside className="sideColumn">
-          <section className="sideCard profileCard">
-            <div className="miniTitleRow">
-              <div>
-                <h3>{t('profile.title')}</h3>
-                <p className="supportText">{t('profile.subtitle')}</p>
-              </div>
-              <span className="metaChip">Lv. {level}</span>
-            </div>
-
-            <div className="pointHero">
-              <div>
-                <span>{t('profile.points')}</span>
-                <strong>{formatNumber(locale, points)}</strong>
-              </div>
-              <div>
-                <span>{t('profile.currentBadge')}</span>
-                <strong>{currentBadge.name}</strong>
-              </div>
-            </div>
-
-            <p className="supportText">{currentBadge.summary}</p>
-
-            <div className="progressTrack">
-              <div className="progressFill" style={{ width: `${badgeProgressPercent}%` }} />
-            </div>
-
-            {nextBadge ? (
-              <div className="progressMeta">
-                <span>{t('profile.nextBadge')}</span>
-                <strong>{nextBadge.name}</strong>
-                <span>
-                  {t('profile.progress', {
-                    current: formatNumber(locale, points),
-                    goal: formatNumber(locale, nextBadge.threshold),
-                  })}
+            <aside className="heroSideCard dashboardCard">
+              <div className="miniTitleRow">
+                <div>
+                  <h2>{boardCopy.trendTitle}</h2>
+                  <p className="supportText">{boardCopy.trendSubtitle}</p>
+                </div>
+                <span className="metaChip">
+                  {boardCopy.strongestBoard}:{' '}
+                  {t(`rooms.${[...boardMetrics].sort((left, right) => right.strength - left.strength)[0]?.room ?? 'Weekend'}`)}
                 </span>
               </div>
-            ) : (
-              <div className="progressMeta">
-                <span>{t('profile.nextBadge')}</span>
-                <strong>{currentBadge.name}</strong>
-                <span>100%</span>
-              </div>
-            )}
 
-            <div className="stackList">
-              <div className="stackRow">
-                <span className="stackLabel">{t('profile.streak')}</span>
-                <strong>{streak}</strong>
-              </div>
-              <div className="stackRow">
-                <span className="stackLabel">{t('profile.sparks')}</span>
-                <strong>{formatNumber(locale, sparks)}</strong>
-              </div>
-            </div>
-
-            <div className="badgeGroup">
-              <span className="stackLabel">{t('profile.badges')}</span>
-              <div className="badgeList">
-                {unlockedBadges.map((badge) => (
-                  <span key={badge.id} className="badgeChip">
-                    {badge.name}
-                  </span>
+              <div className="chartList">
+                {boardMetrics.map((metric) => (
+                  <div key={metric.room} className="chartRow">
+                    <div className="chartLabelRow">
+                      <strong>{t(`rooms.${metric.room}`)}</strong>
+                      <span>{boardCopy.estimatedVotes(metric.votes)}</span>
+                    </div>
+                    <div className="chartTrack">
+                      <div className="chartFill" style={{ width: `${Math.max(12, (metric.strength / maxBoardStrength) * 100)}%` }} />
+                    </div>
+                    <div className="metricMiniRow">
+                      <span>{boardCopy.commentCount(metric.comments)}</span>
+                      <span>{boardCopy.thinkTime(metric.thinkTime)}</span>
+                    </div>
+                  </div>
                 ))}
               </div>
-            </div>
+            </aside>
           </section>
 
-          <section className="sideCard">
-            <div className="miniTitleRow">
+          <section className="sectionBlock">
+            <div className="sectionHead">
               <div>
-                <h3>{t('missions.title')}</h3>
-                <p className="supportText">{t('missions.subtitle')}</p>
+                <h2>{boardCopy.liveTopicsTitle}</h2>
+                <p className="supportText">{boardCopy.liveTopicsSubtitle}</p>
               </div>
+              <button type="button" className="secondaryButton" onClick={() => handleOpenBoard(hotTopics[0]?.card.id)}>
+                {boardCopy.boardCta}
+              </button>
             </div>
 
-            <div className="missionList">
-              {missions.map((mission) => {
-                const progressPercent = Math.min(100, Math.round((mission.current / mission.goal) * 100))
+            <div className="topicGrid">
+              {hotTopics.map((topic) => {
+                const leadingSide = topic.card.left.votes >= topic.card.right.votes ? topic.card.left : topic.card.right
+                const metricLabel =
+                  topic.kind === 'votes'
+                    ? boardCopy.estimatedVotes(getEstimatedVotes(topic.card))
+                    : topic.kind === 'thinking'
+                      ? boardCopy.thinkTime(getEstimatedThinkTime(topic.card))
+                      : boardCopy.spread(getVoteSpread(topic.card))
+                const topicLabel =
+                  topic.kind === 'votes'
+                    ? t('today.voteLeader')
+                    : topic.kind === 'thinking'
+                      ? t('today.thinkLeader')
+                      : t('today.landslideLeader')
+                const commentCount = commentsByCard.get(topic.card.id)?.length ?? 0
 
                 return (
-                  <div key={mission.id} className="missionRow missionRowExpanded">
-                    <div className="missionText">
-                      <strong>{mission.label}</strong>
-                      <span>{mission.reward}</span>
+                  <article key={topic.kind} className="topicPanel">
+                    <span className="metaChip">{topicLabel}</span>
+                    <strong>{topic.card.prompt}</strong>
+                    <p className="supportText">{topic.card.context}</p>
+                    <div className="topicMetricList">
+                      <span className="topicMetric">{metricLabel}</span>
+                      <span className="topicMetric">{boardCopy.commentCount(commentCount)}</span>
                     </div>
-                    <div className="progressTrack">
-                      <div className="progressFill" style={{ width: `${progressPercent}%` }} />
-                    </div>
-                    <div className="missionFooter">
-                      <span>
-                        {mission.current} / {mission.goal}
-                      </span>
-                      <button
-                        type="button"
-                        className={`secondaryButton missionButton ${mission.claimable ? 'ready' : ''}`}
-                        onClick={() => handleClaimMission(mission)}
-                        disabled={!mission.claimable}
-                      >
-                        {mission.claimed ? t('missions.claimed') : mission.claimable ? t('missions.claim') : t('missions.locked')}
+                    <div className="topicFooter">
+                      <span>{leadingSide.label} · {leadingSide.votes}%</span>
+                      <button type="button" className="textButton" onClick={() => handleOpenBoard(topic.card.id)}>
+                        {boardCopy.openBoard}
                       </button>
                     </div>
-                  </div>
+                  </article>
                 )
               })}
             </div>
           </section>
-        </aside>
-      </section>
 
-      <section className="insightGrid">
-        <article className="surfaceCard">
-          <div className="miniTitleRow">
-            <div>
-              <h3>{t('latest.title')}</h3>
-              <p className="supportText">{t('latest.subtitle')}</p>
-            </div>
-          </div>
-
-          {lastResult && selectedCard ? (
-            <div className="resultWrap">
-              <p className="resultHeadline">{lastResult.matched ? t('latest.matched') : t('latest.minority')}</p>
-
-              <div className="voteBars">
-                <div className="voteBarRow">
-                  <span>{selectedCard.left.label}</span>
-                  <div className="voteBarTrack">
-                    <div
-                      className={`voteBar hot ${lastResult.selectedSide === 'left' ? 'active' : ''}`}
-                      style={{ width: `${selectedCard.left.votes}%` }}
-                    />
-                  </div>
-                  <strong>{selectedCard.left.votes}%</strong>
-                </div>
-
-                <div className="voteBarRow">
-                  <span>{selectedCard.right.label}</span>
-                  <div className="voteBarTrack">
-                    <div
-                      className={`voteBar cool ${lastResult.selectedSide === 'right' ? 'active' : ''}`}
-                      style={{ width: `${selectedCard.right.votes}%` }}
-                    />
-                  </div>
-                  <strong>{selectedCard.right.votes}%</strong>
-                </div>
-              </div>
-
-              <div className="resultMeta">
-                <span>{t('latest.saved', { room: t(`rooms.${selectedCard.room}`) })}</span>
-                <strong>+{lastResult.xpGain} XP</strong>
-              </div>
-            </div>
-          ) : (
-            <p className="emptyState">{t('latest.empty')}</p>
-          )}
-        </article>
-
-        <article className="surfaceCard accentCard">
-          <div className="miniTitleRow">
-            <div>
-              <h3>{t('shareCard.title')}</h3>
-              <p className="supportText">{t('shareCard.subtitle')}</p>
-            </div>
-          </div>
-          <p className="sharePreview">{shareText}</p>
-          <button type="button" className="primaryButton fullWidth" onClick={handleCopy}>
-            {shareButtonLabel}
-          </button>
-        </article>
-
-        <article className="surfaceCard">
-          <div className="miniTitleRow">
-            <div>
-              <h3>{t('feed.title')}</h3>
-              <p className="supportText">{t('feed.subtitle')}</p>
-            </div>
-          </div>
-
-          {history.length > 0 ? (
-            <div className="historyList">
-              {history.map((result) => {
-                const card = cardsById.get(result.cardId)
-                if (!card) {
-                  return null
-                }
-
-                return (
-                  <div key={result.playedAt} className="historyItem">
-                    <strong>{card.prompt}</strong>
-                    <p>{result.matched ? t('feed.match') : t('feed.minority')}</p>
-                    <span>{t(`rooms.${result.room}`)}</span>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <p className="emptyState">{t('feed.empty')}</p>
-          )}
-        </article>
-
-        <article className="surfaceCard">
-          <div className="miniTitleRow">
-            <div>
-              <h3>{t('community.title')}</h3>
-              <p className="supportText">{t('community.subtitle')}</p>
-            </div>
-          </div>
-
-          <div className="commentList">
-            {roomComments.slice(0, 4).map((comment) => (
-              <div key={comment.id} className="commentItem">
-                <div className="commentMeta">
-                  <strong>{comment.name}</strong>
-                  <span>{t('community.likes', { value: formatNumber(locale, comment.likes) })}</span>
-                </div>
-                <p>{comment.text}</p>
-              </div>
+          <nav className="roomRail" aria-label={boardCopy.boardNavLabel}>
+            {(['All', ...ROOM_ORDER] as Room[]).map((room) => (
+              <button
+                key={room}
+                type="button"
+                className={`roomPill ${activeRoom === room ? 'active' : ''}`}
+                onClick={() => handleRoomChange(room)}
+              >
+                {t(`rooms.${room}`)}
+              </button>
             ))}
-          </div>
-        </article>
+          </nav>
 
-        <article className="surfaceCard">
-          <div className="miniTitleRow">
-            <div>
-              <h3>{t('ranking.title')}</h3>
-              <p className="supportText">{t('ranking.subtitle')}</p>
+          <section className="arenaLayout">
+            <article className="battlePanel" ref={battleRef}>
+              {currentCard ? (
+                <>
+                  <div className="battleMeta">
+                    <span className="metaChip">{currentCard.heat}</span>
+                    <span>{t(`rooms.${currentCard.room}`)}</span>
+                  </div>
+                  <h2>{currentCard.prompt}</h2>
+                  <p className="supportText">{currentCard.context}</p>
+
+                  <div className="choiceGrid">
+                    <button type="button" className="voteButton warm" onClick={() => handleVote('left')}>
+                      <span className="choiceLabel">{currentCard.left.label}</span>
+                      <span className="choiceDetail">{currentCard.left.detail}</span>
+                      <span className={`choiceVotes ${session ? '' : 'locked'}`}>
+                        {session ? `${currentCard.left.votes}%` : t('battle.hiddenVotes')}
+                      </span>
+                    </button>
+
+                    <button type="button" className="voteButton cool" onClick={() => handleVote('right')}>
+                      <span className="choiceLabel">{currentCard.right.label}</span>
+                      <span className="choiceDetail">{currentCard.right.detail}</span>
+                      <span className={`choiceVotes ${session ? '' : 'locked'}`}>
+                        {session ? `${currentCard.right.votes}%` : t('battle.hiddenVotes')}
+                      </span>
+                    </button>
+                  </div>
+
+                  {!session ? (
+                    <div className="authGate">
+                      <strong>{t('auth.title')}</strong>
+                      <p className="supportText">{t('auth.loginToVote')}</p>
+                      <button type="button" className="primaryButton" onClick={() => openAuthModal(undefined, 'signIn')}>
+                        {t('auth.loginButton')}
+                      </button>
+                    </div>
+                  ) : null}
+
+                  <div className="battleFooter">
+                    <span>{t('battle.compare')}</span>
+                    <button type="button" className="textButton" onClick={() => handleOpenBoard(currentCard.id)}>
+                      {boardCopy.openBoard}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="emptyState">{boardCopy.latestChoiceEmpty}</p>
+              )}
+            </article>
+
+            <aside className="sideColumn">
+              <section className="sideCard discussionPanel">
+                <div className="miniTitleRow">
+                  <div>
+                    <h3>{boardCopy.discussionTitle}</h3>
+                    <p className="supportText">{boardCopy.discussionSubtitle}</p>
+                  </div>
+                  {currentCard ? <span className="metaChip">{boardCopy.commentCount(currentCardComments.length)}</span> : null}
+                </div>
+
+                {currentCard ? (
+                  <>
+                    <div className="metricStrip">
+                      <div className="metricCard">
+                        <span>{boardCopy.voteMetric}</span>
+                        <strong>{formatNumber(locale, getEstimatedVotes(currentCard))}</strong>
+                      </div>
+                      <div className="metricCard">
+                        <span>{boardCopy.thinkMetric}</span>
+                        <strong>{getEstimatedThinkTime(currentCard)}초</strong>
+                      </div>
+                    </div>
+
+                    {selectedCard ? (
+                      <div className="resultInline">
+                        <strong>{boardCopy.latestChoice}</strong>
+                        <p>{lastResult?.matched ? boardCopy.resultsAgree : boardCopy.resultsMinority}</p>
+                      </div>
+                    ) : (
+                      <div className="resultInline empty">
+                        <strong>{boardCopy.latestChoice}</strong>
+                        <p>{boardCopy.latestChoiceEmpty}</p>
+                      </div>
+                    )}
+
+                    <div className="threadList">
+                      {currentCardComments.length > 0 ? (
+                        currentCardComments.map((comment) => (
+                          <div key={comment.id} className="threadItem">
+                            <div className="commentMeta">
+                              <strong>{comment.author}</strong>
+                              <span>{formatRelativeTime(locale, comment.createdAt)}</span>
+                            </div>
+                            <p>{comment.text}</p>
+                            <div className="threadActions">
+                              <button type="button" className="tinyButton" onClick={() => handleLikeComment(comment.id)}>
+                                ♥ {comment.likes}
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="emptyState">{boardCopy.boardEmpty}</p>
+                      )}
+                    </div>
+
+                    <button type="button" className="secondaryButton fullWidth" onClick={() => handleOpenBoard(currentCard.id)}>
+                      {boardCopy.openComments}
+                    </button>
+                  </>
+                ) : null}
+              </section>
+            </aside>
+          </section>
+
+          <section className="sectionBlock boardPreviewSection">
+            <div className="sectionHead">
+              <div>
+                <h2>{boardCopy.boardPreviewTitle}</h2>
+                <p className="supportText">{boardCopy.boardPreviewSubtitle}</p>
+              </div>
+              <button type="button" className="secondaryButton" onClick={() => handleOpenBoard(boardPostsFiltered[0]?.card.id)}>
+                {boardCopy.boardCta}
+              </button>
+            </div>
+
+            <div className="boardPreviewList">
+              {boardPostsFiltered.slice(0, 5).map((post) => (
+                <button key={post.card.id} type="button" className="boardPreviewRow" onClick={() => handleOpenBoard(post.card.id)}>
+                  <div className="boardPreviewInfo">
+                    <div className="boardPreviewMeta">
+                      <span className="metaChip">{t(`rooms.${post.card.room}`)}</span>
+                      <span>{boardCopy.commentCount(post.commentCount)}</span>
+                      <span>{boardCopy.thinkTime(post.thinkTime)}</span>
+                    </div>
+                    <strong>{post.card.prompt}</strong>
+                    <p className="boardPreviewSnippet">{post.latestComment?.text ?? post.card.context}</p>
+                  </div>
+                  <span className="boardPreviewArrow">›</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        </>
+      ) : (
+        <section className="boardPage">
+          <div className="sectionBlock boardHero">
+            <div className="sectionHead">
+              <div>
+                <h1>{boardCopy.boardPageTitle}</h1>
+                <p className="heroText">{boardCopy.boardPageSubtitle}</p>
+              </div>
+              <button type="button" className="secondaryButton" onClick={handleBackHome}>
+                {boardCopy.boardBack}
+              </button>
             </div>
           </div>
 
-          <div className="leaderList">
-            {leaderboard.map((entry, index) => (
-              <div key={`${entry.name}-${index}`} className="leaderRow">
-                <span className="rank">{index + 1}</span>
+          <nav className="roomRail" aria-label={boardCopy.boardNavLabel}>
+            {(['All', ...ROOM_ORDER] as Room[]).map((room) => (
+              <button
+                key={room}
+                type="button"
+                className={`roomPill ${activeRoom === room ? 'active' : ''}`}
+                onClick={() => handleRoomChange(room)}
+              >
+                {t(`rooms.${room}`)}
+              </button>
+            ))}
+          </nav>
+
+          <section className="boardLayout">
+            <article className="surfaceCard boardListCard">
+              <div className="miniTitleRow">
                 <div>
-                  <strong>{entry.name}</strong>
-                  <small>{entry.title}</small>
+                  <h3>{boardCopy.boardPreviewTitle}</h3>
+                  <p className="supportText">{boardCopy.latestActivity}</p>
                 </div>
-                <strong>{entry.streak}</strong>
               </div>
-            ))}
-          </div>
-        </article>
 
-        <article className="surfaceCard">
-          <div className="miniTitleRow">
-            <div>
-              <h3>{t('unlocks.title')}</h3>
-              <p className="supportText">{t('unlocks.subtitle')}</p>
-            </div>
-          </div>
-
-          <div className="rewardList">
-            {rewards.map((reward) => (
-              <div key={reward} className="rewardItem">
-                <strong>{reward}</strong>
-                <span>{formatNumber(locale, sparks)} SP</span>
+              <div className="boardList">
+                {boardPostsFiltered.map((post) => (
+                  <button
+                    key={post.card.id}
+                    type="button"
+                    className={`boardRow ${activeBoardCard?.id === post.card.id ? 'active' : ''}`}
+                    onClick={() => setSelectedBoardCardId(post.card.id)}
+                  >
+                    <div className="boardRowHeader">
+                      <span className="metaChip">{t(`rooms.${post.card.room}`)}</span>
+                      <span>{boardCopy.commentCount(post.commentCount)}</span>
+                    </div>
+                    <strong>{post.card.prompt}</strong>
+                    <p>{post.latestComment?.text ?? post.card.context}</p>
+                    <div className="boardRowFooter">
+                      <span>{boardCopy.estimatedVotes(post.estimatedVotes)}</span>
+                      <span>{boardCopy.thinkTime(post.thinkTime)}</span>
+                    </div>
+                  </button>
+                ))}
               </div>
-            ))}
-          </div>
-        </article>
-      </section>
+            </article>
+
+            <article className="surfaceCard boardDetailCard">
+              {activeBoardCard ? (
+                <>
+                  <div className="battleMeta">
+                    <span className="metaChip">{t(`rooms.${activeBoardCard.room}`)}</span>
+                    <span>{boardCopy.commentCount(activeBoardComments.length)}</span>
+                  </div>
+                  <h2>{activeBoardCard.prompt}</h2>
+                  <p className="supportText">{activeBoardCard.context}</p>
+
+                  <div className="voteBars compact">
+                    <div className="voteBarRow">
+                      <span>{activeBoardCard.left.label}</span>
+                      <div className="voteBarTrack">
+                        <div className="voteBar hot" style={{ width: `${activeBoardCard.left.votes}%` }} />
+                      </div>
+                      <strong>{session ? `${activeBoardCard.left.votes}%` : '??'}</strong>
+                    </div>
+                    <div className="voteBarRow">
+                      <span>{activeBoardCard.right.label}</span>
+                      <div className="voteBarTrack">
+                        <div className="voteBar cool" style={{ width: `${activeBoardCard.right.votes}%` }} />
+                      </div>
+                      <strong>{session ? `${activeBoardCard.right.votes}%` : '??'}</strong>
+                    </div>
+                  </div>
+
+                  <div className="topicMetricList summary">
+                    <span className="topicMetric">{boardCopy.estimatedVotes(getEstimatedVotes(activeBoardCard))}</span>
+                    <span className="topicMetric">{boardCopy.thinkTime(getEstimatedThinkTime(activeBoardCard))}</span>
+                    <span className="topicMetric">{boardCopy.spread(getVoteSpread(activeBoardCard))}</span>
+                  </div>
+
+                  <form className="commentForm" onSubmit={(event) => handleCommentSubmit(event, activeBoardCard.id)}>
+                    <textarea
+                      className="commentTextarea"
+                      value={commentDraft}
+                      onChange={(event) => setCommentDraft(event.target.value)}
+                      placeholder={boardCopy.commentPlaceholder}
+                    />
+                    <div className="authButtonRow">
+                      <button type="submit" className="primaryButton authRowButton">
+                        {boardCopy.commentSubmit}
+                      </button>
+                      {!session ? (
+                        <button type="button" className="secondaryButton authRowButton" onClick={() => openAuthModal(undefined, 'signIn')}>
+                          {t('auth.loginButton')}
+                        </button>
+                      ) : null}
+                    </div>
+                  </form>
+
+                  <div className="commentList">
+                    {activeBoardComments.length > 0 ? (
+                      activeBoardComments.map((comment) => (
+                        <div key={comment.id} className="commentItem boardCommentItem">
+                          <div className="commentMeta">
+                            <strong>{comment.author}</strong>
+                            <span>{formatRelativeTime(locale, comment.createdAt)}</span>
+                          </div>
+                          <p>{comment.text}</p>
+                          <div className="threadActions">
+                            <button type="button" className="tinyButton" onClick={() => handleLikeComment(comment.id)}>
+                              ♥ {comment.likes}
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="emptyState">{boardCopy.boardEmpty}</p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <p className="emptyState">{boardCopy.boardEmpty}</p>
+              )}
+            </article>
+          </section>
+        </section>
+      )}
 
       {isAuthModalOpen ? (
         <div className="authModalBackdrop" role="dialog" aria-modal="true" aria-label={t('auth.modalTitle')}>
